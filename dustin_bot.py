@@ -104,15 +104,32 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     user_text = update.message.text
+    is_group = update.effective_chat.type in ("group", "supergroup")
 
-    if user_id not in conversation_histories:
-        conversation_histories[user_id] = []
+    # В группе отвечаем только на упоминание @username или реплай на сообщение бота
+    if is_group:
+        bot_username = context.bot.username
+        mentioned = f"@{bot_username}" in (user_text or "")
+        reply_to = update.message.reply_to_message
+        replied_to_bot = reply_to and reply_to.from_user and reply_to.from_user.id == context.bot.id
+        if not mentioned and not replied_to_bot:
+            return
+        # Убрать упоминание из текста перед отправкой в Claude
+        user_text = user_text.replace(f"@{bot_username}", "").strip()
+        if not user_text:
+            user_text = "Привет!"
 
-    conversation_histories[user_id].append({"role": "user", "content": user_text})
+    # В группах история ведётся по chat_id, в личке — по user_id
+    history_key = update.effective_chat.id if is_group else user_id
+
+    if history_key not in conversation_histories:
+        conversation_histories[history_key] = []
+
+    conversation_histories[history_key].append({"role": "user", "content": user_text})
 
     # Keep last 30 turns to stay within context limits
-    if len(conversation_histories[user_id]) > 30:
-        conversation_histories[user_id] = conversation_histories[user_id][-30:]
+    if len(conversation_histories[history_key]) > 30:
+        conversation_histories[history_key] = conversation_histories[history_key][-30:]
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
@@ -126,14 +143,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 "cache_control": {"type": "ephemeral"},
             }
         ],
-        messages=conversation_histories[user_id],
+        messages=conversation_histories[history_key],
     )
 
     reply = response.content[0].text
 
-    conversation_histories[user_id].append({"role": "assistant", "content": reply})
+    conversation_histories[history_key].append({"role": "assistant", "content": reply})
 
-    await update.message.reply_text(reply, reply_markup=make_keyboard())
+    # В группе отвечаем реплаем чтобы было понятно на чьё сообщение
+    if is_group:
+        await update.message.reply_text(reply)
+    else:
+        await update.message.reply_text(reply, reply_markup=make_keyboard())
 
 
 def main() -> None:
