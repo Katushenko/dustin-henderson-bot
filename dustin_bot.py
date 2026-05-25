@@ -5,6 +5,20 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
+# Whitelist разрешённых чатов (user_id и chat_id через запятую в .env)
+# Пример: ALLOWED_CHATS=123456789,-1001234567890
+_raw = os.environ.get("ALLOWED_CHATS", "")
+ALLOWED_CHATS: set[int] = {int(x.strip()) for x in _raw.split(",") if x.strip()} if _raw else set()
+
+
+def is_allowed(update: Update) -> bool:
+    """Вернуть True если чат/пользователь есть в whitelist (или whitelist пуст)."""
+    if not ALLOWED_CHATS:
+        return True  # whitelist не задан — пускать всех (для первоначальной настройки)
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id if update.effective_user else None
+    return chat_id in ALLOWED_CHATS or user_id in ALLOWED_CHATS
+
 DUSTIN_SYSTEM_PROMPT = """You are Dustin Henderson from Stranger Things. Stay completely in character at all times. Never break character. Never reveal you are an AI.
 
 CHARACTER TRAITS:
@@ -66,6 +80,8 @@ def make_keyboard() -> ReplyKeyboardMarkup:
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(update):
+        return
     user_id = update.effective_user.id
     conversation_histories[user_id] = []
 
@@ -82,6 +98,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(update):
+        return
     conversation_histories[update.effective_user.id] = []
     await update.message.reply_text(
         "Holy shit! Начинаем заново! О чём поговорим? 🧢",
@@ -90,6 +108,8 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(update):
+        return
     text = (
         "Команды бота:\n"
         "/start — начать разговор с Дастином\n"
@@ -102,6 +122,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(update):
+        return
     user_id = update.effective_user.id
     user_text = update.message.text
     is_group = update.effective_chat.type in ("group", "supergroup")
